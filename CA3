@@ -1,0 +1,229 @@
+
+package Unit5
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.room.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import Unit5.ui.theme.Sem7Theme
+
+@Entity(tableName = "departments")
+data class Department(
+    @PrimaryKey(autoGenerate = true)
+    val deptId: Int = 0,
+    val deptName: String
+)
+
+@Entity(
+    tableName = "students",
+    foreignKeys = [
+        ForeignKey(
+            entity = Department::class,
+            parentColumns = ["deptId"],
+            childColumns = ["departmentId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class Student(
+    @PrimaryKey(autoGenerate = true)
+    val studentId: Int = 0,
+    val studentName: String,
+    val departmentId: Int
+)
+
+data class DepartmentWithStudents(
+    @Embedded val department: Department,
+
+    @Relation(
+        parentColumn = "deptId",
+        entityColumn = "departmentId"
+    )
+    val students: List<Student>
+)
+
+@Dao
+interface DepartmentDao {
+
+    @Insert
+    suspend fun insertDepartment(dept: Department): Long
+
+    @Insert
+    suspend fun insertStudent(student: Student)
+
+    @Transaction
+    @Query("SELECT * FROM departments")
+    fun getDepartments(): Flow<List<DepartmentWithStudents>>
+}
+
+@Database(
+    entities = [Department::class, Student::class],
+    version = 1,
+    exportSchema = false
+)
+abstract class SchoolDatabase : RoomDatabase() {
+
+    abstract fun departmentDao(): DepartmentDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: SchoolDatabase? = null
+
+        fun getDatabase(context: android.content.Context): SchoolDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    SchoolDatabase::class.java,
+                    "school_db"
+                ).build()
+
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
+
+class DepartmentViewModel(
+    private val dao: DepartmentDao
+) : ViewModel() {
+
+    val departments = dao.getDepartments().stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        emptyList()
+    )
+
+    fun insertSampleData() {
+        viewModelScope.launch {
+            if (dao.getDepartments().first().isEmpty()) {
+
+                val d1 = dao.insertDepartment(
+                    Department(deptName = "Computer Science")
+                ).toInt()
+
+                val d2 = dao.insertDepartment(
+                    Department(deptName = "Information Technology")
+                ).toInt()
+
+                dao.insertStudent(
+                    Student(studentName = "Rahul", departmentId = d1)
+                )
+
+                dao.insertStudent(
+                    Student(studentName = "Aman", departmentId = d1)
+                )
+
+                dao.insertStudent(
+                    Student(studentName = "Priya", departmentId = d2)
+                )
+            }
+        }
+    }
+}
+
+class DepartmentViewModelFactory(
+    private val dao: DepartmentDao
+) : ViewModelProvider.Factory {
+
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(DepartmentViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return DepartmentViewModel(dao) as T
+        }
+
+        throw IllegalArgumentException("Unknown ViewModel")
+    }
+}
+
+class CA3 : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val db = SchoolDatabase.getDatabase(applicationContext)
+        val factory = DepartmentViewModelFactory(db.departmentDao())
+
+        setContent {
+            Sem7Theme {
+                val vm: DepartmentViewModel = viewModel(
+                    factory = factory
+                )
+
+                DepartmentScreen(vm)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DepartmentScreen(vm: DepartmentViewModel) {
+
+    val departments by vm.departments.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        vm.insertSampleData()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text("Department & Student Viewer")
+                }
+            )
+        }
+    ) { padding ->
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+        ) {
+
+            items(departments) { item ->
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                ) {
+
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+
+                        Text(
+                            item.department.deptName,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        item.students.forEach { student ->
+                            Text("• ${student.studentName}")
+                        }
+
+                        if (item.students.isEmpty()) {
+                            Text("No students available")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
